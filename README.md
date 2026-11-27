@@ -1,6 +1,8 @@
 # Exponential-Family Membership Inference — code demo
 
-Anonymous code accompanying a paper under review. This is a self-contained
+Code accompanying *Exponential-Family Membership Inference: From LiRA and RMIA to
+BaVarIA* (Rickard Brännvall, Transactions on Machine Learning Research, 2026;
+[OpenReview](https://openreview.net/forum?id=b1x5g38jsT)). This is a self-contained
 NumPy implementation of the attack scoring functions (LiRA, RMIA, the BASE1–4
 hierarchy, and BaVarIA-$n$ / BaVarIA-$t$) plus a minimal data bundle and a
 notebook that reproduces two ROC figures end-to-end and verifies element-wise
@@ -16,7 +18,7 @@ $K = 8$ max). About one minute on a laptop CPU. No GPU needed.
 ├── methods.py            # LiRA, BASE1-4, RMIA, BaVarIA-n, BaVarIA-t (numpy)
 ├── utils.py              # bundle loader, antithetic-pair sampler, metrics
 ├── demo.ipynb            # produces the two figures + verification cell
-└── data/                 # ~420 KB total
+└── data/                 # ~490 KB total
     ├── shadow_logits.npy        # (5010, 10) float32
     ├── shadow_mask.npy          # (5010, 10) bool
     ├── target_logits.npy        # (5010,)    float32
@@ -46,3 +48,22 @@ jupyter notebook demo.ipynb
 Run all cells. The notebook writes the two figures to `figures/` and prints an
 `OK` on every line of the final verification cell when the demo methods agree
 with the reference scores to float32 round-off.
+
+The methods follow the published paper. BaVarIA-$n$ uses an inverse-gamma prior on
+the per-point variance with a flat prior on the mean ($\alpha_\varnothing = 2$;
+Section 4.3 and Appendix D.2); the version first posted here, matching the submitted
+manuscript, used a coupled normal-inverse-gamma prior with $\alpha_\varnothing = 1$.
+BASE2 is the separate-means, constant-variance score of Section 3; the first version
+had a pooled-mean, pooled-variance score under that name.
+
+## Citation
+
+```bibtex
+@article{brannvall2026exponential,
+  title   = {Exponential-Family Membership Inference: From {LiRA} and {RMIA} to {BaVarIA}},
+  author  = {Br{\"a}nnvall, Rickard},
+  journal = {Transactions on Machine Learning Research},
+  year    = {2026},
+  url     = {https://openreview.net/forum?id=b1x5g38jsT}
+}
+```

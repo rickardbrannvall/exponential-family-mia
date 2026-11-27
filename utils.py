@@ -1,6 +1,6 @@
 """Bundle loader, pair sampler, and metric helpers for the demo notebook.
 
-Extracted from the project repository. See README for the provenance note.
+Used by demo.ipynb; see README.md for the data bundle.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ DATA_DIR = Path(__file__).parent / "data"
 
 
 def load_bundle() -> Dict[str, np.ndarray]:
-    """Load the bundled CIFAR-10/WRN signals and metadata."""
+    """Load the bundled Location/MLP-3 signals and metadata."""
     with open(DATA_DIR / "meta.json") as f:
         meta = json.load(f)
     return {

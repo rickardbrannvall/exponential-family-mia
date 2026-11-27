@@ -1,8 +1,8 @@
 """Attack scoring functions used in the demo.
 
-Numpy rewrite of the vectorised attack implementations. Same likelihood formulae, same NIG hyperparameters; the original RMIA
-used a torch outer product on GPU, which is replaced here by a numpy-batched
-equivalent. The notebook's final cell checks agreement against scores
+NumPy rewrite of the attack implementations used for the paper, with the same
+likelihood formulae and hyperparameters. The paper's RMIA used a torch outer
+product on GPU, which is replaced here by a batched NumPy equivalent. The notebook's final cell checks agreement against scores
 produced by the original code on the same data.
 
 Online uses both IN and OUT shadow signals; offline uses OUT only and replaces
@@ -10,13 +10,16 @@ the IN class with a global prior estimated from the shadow population.
 
 Methods
 -------
-LiRA       — Carlini et al., 2022. Gaussian on log-odds, per-sample MLE
-             variance once K >= 2 * fix_var_threshold.
-BASE1–4    — exponential / Gaussian variants from the paper (appendix).
-             BASE4 is equivalent to LiRA online.
-RMIA       — Zarifzadeh et al., 2023.
-BaVarIA-n  — Gaussian LLR using the NIG posterior mean for variance.
-BaVarIA-t  — NIG posterior-predictive Student-t.
+LiRA       — Carlini et al., 2022. Gaussian on log-odds, global IN and OUT
+             variances below K = 2 * fix_var_threshold, per-point MLE variances
+             from there on.
+BASE1–4    — the exponential-family hierarchy of the paper (Section 3).
+             BASE1 is ROC-equivalent to RMIA (gamma = 1); BASE4 equals online
+             LiRA once LiRA uses per-point variances.
+RMIA       — Zarifzadeh et al., 2024.
+BaVarIA-n  — Gaussian LLR with inverse-gamma shrinkage of the per-point
+             variances (flat prior on the mean).
+BaVarIA-t  — Student-t posterior predictive under a normal-inverse-gamma prior.
 """
 
 from __future__ import annotations
@@ -55,10 +58,9 @@ def _split_in_out(shadow_stats: np.ndarray, shadow_mask: np.ndarray):
 
 
 def _neglog_mean_negexp(x: np.ndarray, axis: int = 1) -> np.ndarray:
-    """-log(mean(exp(-x))), NaN-aware. Used as the pooled centre for the BASE1
-    exponential model: for loss values x_j = -log p_j this equals
-    -log(mean(p_j)), which is the log of the harmonic-style mean shadow signal
-    that BASE1's score subtracts off.
+    """-log(mean(exp(-x))), NaN-aware: the log-sum-exp center of the BASE1 score.
+
+    For loss values x_j = -log p_j this equals -log(mean(p_j)).
     """
     mn = np.nanmin(x, axis=axis, keepdims=True)
     z = np.exp(mn - x)
@@ -115,7 +117,7 @@ def lira(target_logodds: np.ndarray,
 
 
 # =============================================================================
-# BASE1–4 (Friends of the Exponential Family)
+# BASE1–4
 # =============================================================================
 
 def base1(target_loss: np.ndarray,
@@ -135,23 +137,22 @@ def base1(target_loss: np.ndarray,
 
 def base2(target_logodds: np.ndarray,
           shadow_logodds: np.ndarray,
-          shadow_mask: np.ndarray | None = None,
-          online: bool = True) -> np.ndarray:
-    """BASE2: pooled Gaussian on log-odds.
+          shadow_mask: np.ndarray) -> np.ndarray:
+    """BASE2: separate IN and OUT means, constant variance (Gaussian, online only).
 
-    score_i = (target_i - mu_pool_i) / var_pool_i
+    score_i = (mu_in - mu_out) * (target - (mu_in + mu_out)/2); the constant
+    variance does not change the ranking, so it is left out.
     """
-    if not online and shadow_mask is not None:
-        shadow_logodds = np.where(shadow_mask.astype(bool), np.nan, shadow_logodds)
-    mu = np.nanmean(shadow_logodds, axis=1)
-    var = np.maximum(np.nanvar(shadow_logodds, axis=1), EPS)
-    return (target_logodds - mu) / var
+    s_in, s_out = _split_in_out(shadow_logodds, shadow_mask)
+    mu_in = np.nanmean(s_in, axis=1)
+    mu_out = np.nanmean(s_out, axis=1)
+    return (mu_in - mu_out) * (target_logodds - 0.5 * (mu_in + mu_out))
 
 
 def base3(target_logodds: np.ndarray,
           shadow_logodds: np.ndarray,
           shadow_mask: np.ndarray) -> np.ndarray:
-    """BASE3: separate means, pooled variance (Gaussian, online only).
+    """BASE3: separate IN and OUT means, per-point variance pooled over IN and OUT (online only).
 
     score_i = ((mu_in - mu_out) / var_pool) * (target - (mu_in + mu_out)/2).
     """
@@ -169,7 +170,7 @@ def base3(target_logodds: np.ndarray,
 def base4(target_logodds: np.ndarray,
           shadow_logodds: np.ndarray,
           shadow_mask: np.ndarray) -> np.ndarray:
-    """BASE4: class-conditional Gaussian (equivalent to LiRA online)."""
+    """BASE4: per-point IN and OUT means and variances (online LiRA with per-point variances)."""
     s_in, s_out = _split_in_out(shadow_logodds, shadow_mask)
     mu_in = np.nanmean(s_in, axis=1)
     mu_out = np.nanmean(s_out, axis=1)
@@ -197,7 +198,7 @@ def rmia(target_conf: np.ndarray,
          z_sample_size: int | None = None,
          seed: int = 0,
          batch_size: int = 2048) -> np.ndarray:
-    """RMIA: relativity-boosted likelihood ratio (Zarifzadeh et al., 2023).
+    """RMIA: relativity-boosted likelihood ratio (Zarifzadeh et al., 2024).
 
     Uses ground-truth-label confidence as the signal. Z reference set is a
     random subsample of the audit population to keep memory bounded.
@@ -262,7 +263,7 @@ def _nig_priors(shadow_logodds: np.ndarray,
 
 
 def _nig_posterior(x_per_sample, mu0, beta0, kappa0, alpha0):
-    """Vectorised posterior NIG params; rows with all-NaN fall back to prior."""
+    """Vectorized posterior NIG params; rows with all-NaN fall back to prior."""
     n = np.sum(~np.isnan(x_per_sample), axis=1).astype(float)
     s = np.nansum(x_per_sample, axis=1)
     xbar = np.where(n > 0, s / np.maximum(n, 1.0), mu0)
@@ -273,30 +274,48 @@ def _nig_posterior(x_per_sample, mu0, beta0, kappa0, alpha0):
     return xbar, kappa_n, alpha_n, beta_n
 
 
+def _ig_var(x_per_sample, var_global, alpha0):
+    """Per-row sample mean and posterior-mean variance, flat prior on the mean.
+
+    sigma^2 ~ Inv-Gamma(alpha0, beta0) with beta0 = var_global * (alpha0 - 1), so the
+    prior mean of sigma^2 is the global variance. With S the within-row sum of squares,
+        E[sigma^2 | data] = (beta0 + S/2) / (alpha0 + (n - 1)/2 - 1).
+    Rows with no observations return NaN for the mean and the prior variance.
+    """
+    beta0 = max(var_global * (alpha0 - 1.0), 1e-6)
+    n = np.sum(~np.isnan(x_per_sample), axis=1).astype(float)
+    xbar = np.where(n > 0, np.nansum(x_per_sample, axis=1) / np.maximum(n, 1.0), np.nan)
+    ss = np.nansum((x_per_sample - xbar[:, None]) ** 2, axis=1)
+    alpha_n = alpha0 + np.maximum(n - 1.0, 0.0) / 2.0
+    beta_n = beta0 + ss / 2.0
+    return xbar, np.maximum(beta_n / (alpha_n - 1.0), EPS)
+
+
 def bavaria_n(target_logodds: np.ndarray,
               shadow_logodds: np.ndarray,
               shadow_mask: np.ndarray,
               online: bool = True,
-              kappa0: float = 1.0,
-              alpha0: float = 1.0) -> np.ndarray:
-    """BaVarIA-n: Normal LLR with NIG posterior-mean variance shrinkage."""
+              alpha0: float = 2.0) -> np.ndarray:
+    """BaVarIA-n: Gaussian LLR with the per-point variance shrunk toward the global one.
+
+    Inverse-gamma prior on each class variance (alpha0 = 2, prior mean = global variance)
+    and a flat prior on the mean, so the mean is the per-point sample mean. Offline, the
+    IN class is the prior: global IN mean and global IN variance.
+    """
     mu0_in, mu0_out, beta0_in, beta0_out = _nig_priors(shadow_logodds, shadow_mask, alpha0)
+    var_g_in = beta0_in / (alpha0 - 1.0)
+    var_g_out = beta0_out / (alpha0 - 1.0)
     s_in, s_out = _split_in_out(shadow_logodds, shadow_mask)
 
     if online:
-        xbar_in, kappa_n_in, alpha_n_in, beta_n_in = _nig_posterior(
-            s_in, mu0_in, beta0_in, kappa0, alpha0)
+        xbar_in, var_in = _ig_var(s_in, var_g_in, alpha0)
+        xbar_in = np.where(np.isnan(xbar_in), mu0_in, xbar_in)
     else:
-        # Offline: IN class collapses to the prior (no IN observations seen).
         xbar_in = np.full_like(target_logodds, mu0_in, dtype=float)
-        beta_n_in = np.full_like(target_logodds, beta0_in, dtype=float)
-        alpha_n_in = np.full_like(target_logodds, alpha0, dtype=float)
+        var_in = np.full_like(target_logodds, max(var_g_in, EPS), dtype=float)
 
-    xbar_out, kappa_n_out, alpha_n_out, beta_n_out = _nig_posterior(
-        s_out, mu0_out, beta0_out, kappa0, alpha0)
-
-    var_in = np.maximum(np.where(alpha_n_in > 1, beta_n_in / (alpha_n_in - 1), beta_n_in), EPS)
-    var_out = np.maximum(np.where(alpha_n_out > 1, beta_n_out / (alpha_n_out - 1), beta_n_out), EPS)
+    xbar_out, var_out = _ig_var(s_out, var_g_out, alpha0)
+    xbar_out = np.where(np.isnan(xbar_out), mu0_out, xbar_out)
 
     scores = (
         0.5 * np.log(var_out / var_in)
