@@ -1,9 +1,8 @@
 """Attack scoring functions used in the demo.
 
-NumPy rewrite of the attack implementations used for the paper, with the same
-likelihood formulae and hyperparameters. The paper's RMIA used a torch outer
-product on GPU, which is replaced here by a batched NumPy equivalent. The notebook's final cell checks agreement against scores
-produced by the original code on the same data.
+NumPy implementations of the attacks in the paper, with the paper's likelihood
+formulae and hyperparameters. The notebook's final cell checks them against
+scores computed by the paper's experiment code on the same data.
 
 Online uses both IN and OUT shadow signals; offline uses OUT only and replaces
 the IN class with a global prior estimated from the shadow population.
@@ -88,8 +87,8 @@ def lira(target_logodds: np.ndarray,
     mask = shadow_mask.astype(bool)
     n_samples, K = shadow_logodds.shape
 
-    # Fixed (pooled) std fallback. Offline uses OUT-only shadows to match the
-    # paper pipeline (where the offline path is fed shadow_logits_out_only).
+    # Global (pooled) std, used below K = 2 * fix_var_threshold. Offline uses
+    # the OUT shadows only.
     flat = shadow_logodds.ravel()
     flat_mask = mask.ravel()
     if online:
@@ -186,7 +185,7 @@ def base4(target_logodds: np.ndarray,
 
 
 # =============================================================================
-# RMIA (numpy, batched — no torch required)
+# RMIA
 # =============================================================================
 
 def rmia(target_conf: np.ndarray,
